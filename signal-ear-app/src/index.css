@@ -1,0 +1,138 @@
+/* ── Signal Ear Global Styles ── */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+  /* Brand Colors */
+  --se-midnight: #0a0e27;
+  --se-deep: #111638;
+  --se-navy: #1a1f4e;
+  --se-electric: #6366f1;
+  --se-violet: #8b5cf6;
+  --se-cyan: #06b6d4;
+  --se-emerald: #10b981;
+  --se-amber: #f59e0b;
+  --se-rose: #f43f5e;
+  --se-slate: #94a3b8;
+  --se-light: #e2e8f0;
+  --se-white: #f8fafc;
+
+  /* Gradients */
+  --se-gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #06b6d4 100%);
+  --se-gradient-card: linear-gradient(145deg, rgba(26, 31, 78, 0.6) 0%, rgba(17, 22, 56, 0.8) 100%);
+  --se-gradient-glow: radial-gradient(ellipse at 50% 0%, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+
+  /* Shadows */
+  --se-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --se-shadow-md: 0 4px 20px rgba(0, 0, 0, 0.4);
+  --se-shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.5);
+  --se-shadow-glow: 0 0 30px rgba(99, 102, 241, 0.3);
+
+  /* Typography */
+  --se-font-display: 'Space Grotesk', sans-serif;
+  --se-font-body: 'Inter', sans-serif;
+
+  /* Spacing */
+  --se-radius: 12px;
+  --se-radius-lg: 20px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--se-font-body);
+  background: var(--se-midnight);
+  color: var(--se-light);
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 60vh;
+  background: var(--se-gradient-glow);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--se-font-display);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+a {
+  color: var(--se-cyan);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+a:hover {
+  color: var(--se-electric);
+}
+
+button {
+  font-family: var(--se-font-body);
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--se-midnight);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--se-navy);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--se-electric);
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.2); }
+  50% { box-shadow: 0 0 40px rgba(99, 102, 241, 0.4); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.fade-in {
+  animation: fadeInUp 0.5s ease-out forwards;
+}
+
+.pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
