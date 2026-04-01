@@ -1,0 +1,180 @@
+{
+  "name": "Social Pipeline: Approval → Post to LinkedIn",
+  "nodes": [
+    {
+      "parameters": {
+        "events": ["reaction_added"],
+        "options": {}
+      },
+      "id": "reaction-trigger",
+      "name": "Slack Reaction Trigger",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [0, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Fires when anyone reacts to a message. We filter for checkmark reactions next."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.event.reaction }}",
+              "rightValue": "white_check_mark",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "is-approved",
+      "name": "Is Checkmark?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "get",
+        "channelId": "={{ $json.event.item.channel }}",
+        "timestamp": "={{ $json.event.item.ts }}"
+      },
+      "id": "get-original",
+      "name": "Get Original Message",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [500, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Fetches the full approval message text so we can extract the posts."
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $input.first().json;\nconst text = msg.text || msg.message?.text || '';\n\n// Extract LinkedIn post from between the markers\nconst linkedinMatch = text.match(/\\*--- LinkedIn Post ---\\*\\n\\n([\\s\\S]*?)\\n\\n\\*--- X \\/ Twitter Post ---\\*/); \nconst linkedinText = linkedinMatch ? linkedinMatch[1].trim() : '';\n\n// Extract hashtags line\nconst hashtagMatch = text.match(/_Hashtags:_ (.+)/);\nconst hashtags = hashtagMatch ? hashtagMatch[1].trim() : '';\n\n// Extract X post\nconst xMatch = text.match(/\\*--- X \\/ Twitter Post ---\\*\\n\\n([\\s\\S]*?)\\n\\n(?:_Thread:|\\*Notes:|━)/);\nconst xText = xMatch ? xMatch[1].trim() : '';\n\nreturn [{\n  json: {\n    linkedin_text: linkedinText + (hashtags ? '\\n\\n' + hashtags : ''),\n    x_text: xText,\n    channel: msg.channel || $('Slack Reaction Trigger').first().json.event?.item?.channel,\n    original_ts: msg.ts || $('Slack Reaction Trigger').first().json.event?.item?.ts\n  }\n}];"
+      },
+      "id": "extract-posts",
+      "name": "Extract Post Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 200],
+      "notes": "Parses the approved Slack message to extract LinkedIn and X post text."
+    },
+    {
+      "parameters": {
+        "url": "https://api.linkedin.com/v2/ugcPosts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  author: 'urn:li:organization:YOUR_LINKEDIN_ORG_ID',\n  lifecycleState: 'PUBLISHED',\n  specificContent: {\n    'com.linkedin.ugc.ShareContent': {\n      shareCommentary: {\n        text: $json.linkedin_text\n      },\n      shareMediaCategory: 'NONE'\n    }\n  },\n  visibility: {\n    'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC'\n  }\n}) }}",
+        "options": {}
+      },
+      "id": "post-linkedin",
+      "name": "Post to LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_LINKEDIN_CREDENTIAL_ID",
+          "name": "LinkedIn Token"
+        }
+      },
+      "notes": ">>> EDIT: Replace YOUR_LINKEDIN_ORG_ID with your LinkedIn Organization ID <<<"
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.com/2/tweets",
+        "authentication": "oAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.x_text }) }}",
+        "options": {}
+      },
+      "id": "post-x",
+      "name": "Post to X",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "YOUR_X_CREDENTIAL_ID",
+          "name": "X/Twitter OAuth2"
+        }
+      },
+      "notes": "Posts to X. Configure OAuth2 credentials in n8n."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "byId",
+        "channelId": "={{ $json.channel || $('Extract Post Content').first().json.channel }}",
+        "text": ":white_check_mark: *Posted!*\n\nLinkedIn: Done\nX: Done",
+        "otherOptions": {
+          "thread_ts": "={{ $('Extract Post Content').first().json.original_ts }}"
+        }
+      },
+      "id": "confirm",
+      "name": "Confirm in Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1250, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Posts a threaded confirmation reply on the original approval message."
+    }
+  ],
+  "connections": {
+    "Slack Reaction Trigger": {
+      "main": [[{ "node": "Is Checkmark?", "type": "main", "index": 0 }]]
+    },
+    "Is Checkmark?": {
+      "main": [
+        [{ "node": "Get Original Message", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Get Original Message": {
+      "main": [[{ "node": "Extract Post Content", "type": "main", "index": 0 }]]
+    },
+    "Extract Post Content": {
+      "main": [
+        [
+          { "node": "Post to LinkedIn", "type": "main", "index": 0 },
+          { "node": "Post to X", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Post to LinkedIn": {
+      "main": [[{ "node": "Confirm in Slack", "type": "main", "index": 0 }]]
+    },
+    "Post to X": {
+      "main": [[{ "node": "Confirm in Slack", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "tags": [{ "name": "social-pipeline" }]
+}

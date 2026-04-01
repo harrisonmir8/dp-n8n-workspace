@@ -1,0 +1,294 @@
+{
+  "name": "Social Pipeline: Scan Slack + Draft Posts",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "triggerAtHour": 9 },
+            { "triggerAtHour": 13 },
+            { "triggerAtHour": 17 }
+          ]
+        }
+      },
+      "id": "cron",
+      "name": "3x Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ch1",
+              "name": "channels",
+              "value": "={{ ['CHANNEL_ID_1', 'CHANNEL_ID_2'] }}",
+              "type": "array"
+            },
+            {
+              "id": "approval_ch",
+              "name": "approval_channel",
+              "value": "APPROVAL_CHANNEL_ID",
+              "type": "string"
+            },
+            {
+              "id": "scanner_prompt",
+              "name": "scanner_prompt",
+              "value": "You are a marketing content scout for Digital Position, a digital marketing agency.\n\nScan the Slack messages and identify content-worthy topics for social media. Look for:\n1. CLIENT QUESTIONS — Pain points or misconceptions in digital marketing\n2. EXCITING WINS — Campaign results, traffic increases, conversion improvements, ROAS breakthroughs\n3. STRATEGIES THAT WORK — Tactics producing results (SEO, PPC, paid social, analytics)\n4. CASE STUDIES — Before/after scenarios, client transformations\n5. INDUSTRY COMMENTARY — Algorithm changes, platform updates, trends, hot takes\n\nRules:\n- Only flag genuinely interesting, post-worthy content\n- Prefer topics with data, numbers, or screenshots\n- ANONYMIZE all client info (names, URLs, revenue). Use \"a client\" or \"an e-commerce brand\"\n- Rate content_strength: \"high\" (data + narrative), \"medium\" (one of those), \"low\" (just interesting)\n- If nothing is interesting, return empty topics_found array\n\nReturn ONLY valid JSON (no markdown fences):\n{\"topics_found\":[{\"id\":\"topic-001\",\"category\":\"exciting_win|strategy|case_study|client_question|industry_commentary\",\"headline\":\"Short 5-10 word summary\",\"summary\":\"2-3 sentences on why this is post-worthy\",\"source_messages\":[{\"user\":\"name\",\"channel\":\"#channel\",\"text\":\"original text\"}],\"has_screenshots\":false,\"suggested_angle\":\"How to position this as a social post\",\"content_strength\":\"high|medium|low\"}]}",
+              "type": "string"
+            },
+            {
+              "id": "creator_prompt",
+              "name": "creator_prompt",
+              "value": "You are a social media content writer for Digital Position, a digital marketing agency.\n\nBrand Voice:\n- Authoritative but approachable — we know our stuff but aren't stuffy\n- Data-driven — lead with numbers and results\n- Practitioner perspective — in the trenches, not theorizing\n- Honest — what actually works, not hype\n- Conversational — talking to a smart colleague\n\nLINKEDIN RULES:\n- Hook in the FIRST LINE (shows before \"see more\")\n- Use line breaks liberally — no walls of text\n- 150-300 words ideal\n- End with engagement question\n- 3-5 hashtags at the end, not inline\n\nX/TWITTER RULES:\n- Main tweet under 280 characters\n- Thread (3-5 tweets max) for longer stories\n- Lead with the punch — most interesting stat first\n- 1-2 hashtags max\n- More casual than LinkedIn\n\nRules:\n- NEVER include client names, URLs, or identifying details\n- No buzzwords: \"game-changer\", \"revolutionary\", \"crushing it\" — be specific\n- Every post needs a clear takeaway\n- If screenshots available, reference them\n\nReturn ONLY valid JSON (no markdown fences):\n{\"topic_id\":\"topic-001\",\"linkedin_post\":{\"text\":\"Full post text with line breaks\",\"hashtags\":[\"#DigitalMarketing\"],\"has_image\":false,\"image_notes\":\"description if image needed\"},\"x_post\":{\"text\":\"Tweet under 280 chars\",\"hashtags\":[\"#Marketing\"],\"thread\":[\"optional additional tweets\"]},\"posting_notes\":\"Context for the approver\"}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "config",
+      "name": "CONFIG — Edit This Node",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [200, 300],
+      "notes": ">>> EDIT THIS NODE: Set your Slack channel IDs and approval channel ID <<<"
+    },
+    {
+      "parameters": {
+        "operation": "splitOut",
+        "fieldToSplitOut": "channels",
+        "include": "allOtherFields"
+      },
+      "id": "split",
+      "name": "Split Channels",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "resource": "channel",
+        "operation": "history",
+        "channelId": "={{ $json.channels }}",
+        "returnAll": false,
+        "limit": 50,
+        "filters": {
+          "oldest": "={{ Math.floor(Date.now() / 1000) - 28800 }}"
+        }
+      },
+      "id": "slack-read",
+      "name": "Read Slack Messages",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [600, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all messages from all channels into one array\nconst allMessages = [];\nfor (const item of $input.all()) {\n  if (item.json.messages) {\n    for (const msg of item.json.messages) {\n      allMessages.push({\n        user: msg.user || 'unknown',\n        text: msg.text || '',\n        timestamp: msg.ts,\n        channel: item.json.channel || 'unknown',\n        thread_reply_count: msg.reply_count || 0,\n        has_files: (msg.files && msg.files.length > 0) || false\n      });\n    }\n  }\n}\n\n// Pass config through\nconst config = $input.first().json;\nreturn [{\n  json: {\n    all_messages: allMessages,\n    message_count: allMessages.length,\n    scanner_prompt: config.scanner_prompt || $('CONFIG — Edit This Node').first().json.scanner_prompt,\n    creator_prompt: config.creator_prompt || $('CONFIG — Edit This Node').first().json.creator_prompt,\n    approval_channel: config.approval_channel || $('CONFIG — Edit This Node').first().json.approval_channel\n  }\n}];"
+      },
+      "id": "merge",
+      "name": "Merge Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'claude-sonnet-4-20250514',\n  max_tokens: 4096,\n  system: $json.scanner_prompt,\n  messages: [{\n    role: 'user',\n    content: 'Scan these Slack messages for post-worthy content. Return JSON only.\\n\\nMessages:\\n' + JSON.stringify($json.all_messages)\n  }]\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "claude-scan",
+      "name": "Agent 1: Scan Topics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API"
+        }
+      },
+      "notes": "Claude scans all Slack messages and identifies post-worthy topics."
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst raw = response.content[0].text;\nconst config = $('Merge Messages').first().json;\n\ntry {\n  // Handle potential markdown fences\n  const cleaned = raw.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  const parsed = JSON.parse(cleaned);\n\n  if (!parsed.topics_found || parsed.topics_found.length === 0) {\n    return [{ json: { has_topics: false, creator_prompt: config.creator_prompt, approval_channel: config.approval_channel } }];\n  }\n\n  return parsed.topics_found.map(topic => ({\n    json: {\n      has_topics: true,\n      ...topic,\n      creator_prompt: config.creator_prompt,\n      approval_channel: config.approval_channel\n    }\n  }));\n} catch (e) {\n  return [{ json: { has_topics: false, error: e.message, raw_response: raw } }];\n}"
+      },
+      "id": "parse-topics",
+      "name": "Parse Topics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_topics }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-topics",
+      "name": "Topics Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'claude-sonnet-4-20250514',\n  max_tokens: 4096,\n  system: $json.creator_prompt,\n  messages: [{\n    role: 'user',\n    content: 'Write LinkedIn and X posts for this topic. Return JSON only.\\n\\nTopic:\\n' + JSON.stringify({\n      id: $json.id,\n      category: $json.category,\n      headline: $json.headline,\n      summary: $json.summary,\n      source_messages: $json.source_messages,\n      suggested_angle: $json.suggested_angle,\n      has_screenshots: $json.has_screenshots\n    })\n  }]\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "claude-write",
+      "name": "Agent 2: Write Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1700, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API"
+        }
+      },
+      "notes": "Claude takes each topic and writes LinkedIn + X post drafts."
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst raw = response.content[0].text;\nconst approval_channel = $('Parse Topics').first().json.approval_channel;\n\ntry {\n  const cleaned = raw.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  const post = JSON.parse(cleaned);\n\n  // Format the Slack approval message\n  const lines = [\n    '*:mega: Social Post Draft for Approval*',\n    '━━━━━━━━━━━━━━━━━━━━━━━━━',\n    '',\n    `*Topic:* ${post.topic_id || 'N/A'}`,\n    '',\n    '*--- LinkedIn Post ---*',\n    '',\n    post.linkedin_post ? post.linkedin_post.text : '_No LinkedIn post generated_',\n    '',\n    post.linkedin_post ? `_Hashtags:_ ${post.linkedin_post.hashtags.join(' ')}` : '',\n    post.linkedin_post && post.linkedin_post.has_image ? `_Image:_ ${post.linkedin_post.image_notes}` : '',\n    '',\n    '*--- X / Twitter Post ---*',\n    '',\n    post.x_post ? post.x_post.text : '_No X post generated_',\n    '',\n    post.x_post && post.x_post.thread && post.x_post.thread.length > 0 ? '_Thread:_\\n' + post.x_post.thread.map((t, i) => `${i+2}/ ${t}`).join('\\n') : '',\n    '',\n    post.posting_notes ? `*Notes:* ${post.posting_notes}` : '',\n    '',\n    '━━━━━━━━━━━━━━━━━━━━━━━━━',\n    'React to this message:',\n    ':white_check_mark: Approve and post as-is',\n    ':pencil2: Approve with edits (reply with changes)',\n    ':x: Reject'\n  ];\n\n  return [{\n    json: {\n      approval_message: lines.filter(l => l !== undefined).join('\\n'),\n      approval_channel: approval_channel,\n      linkedin_text: post.linkedin_post ? post.linkedin_post.text + '\\n\\n' + post.linkedin_post.hashtags.join(' ') : '',\n      x_text: post.x_post ? post.x_post.text : '',\n      x_thread: post.x_post && post.x_post.thread ? post.x_post.thread : [],\n      topic_id: post.topic_id\n    }\n  }];\n} catch (e) {\n  return [{ json: { error: e.message, raw_response: raw, approval_channel: approval_channel } }];\n}"
+      },
+      "id": "format-approval",
+      "name": "Agent 3: Format for Approval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1950, 200],
+      "notes": "Formats Claude's output into a clean Slack message with approval instructions."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "byId",
+        "channelId": "={{ $json.approval_channel }}",
+        "text": "={{ $json.approval_message }}",
+        "otherOptions": {
+          "unfurl_links": false
+        }
+      },
+      "id": "slack-send",
+      "name": "Send to Slack for Approval",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [2200, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Posts the formatted draft to your approval channel."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "byId",
+        "channelId": "={{ $json.approval_channel }}",
+        "text": ":mag: Scan complete — no post-worthy topics found this cycle.",
+        "otherOptions": {}
+      },
+      "id": "slack-no-topics",
+      "name": "Notify: No Topics",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1700, 450],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Optional: notifies when no topics were found. Delete this node if you don't want the noise."
+    }
+  ],
+  "connections": {
+    "3x Daily Trigger": {
+      "main": [[{ "node": "CONFIG — Edit This Node", "type": "main", "index": 0 }]]
+    },
+    "CONFIG — Edit This Node": {
+      "main": [[{ "node": "Split Channels", "type": "main", "index": 0 }]]
+    },
+    "Split Channels": {
+      "main": [[{ "node": "Read Slack Messages", "type": "main", "index": 0 }]]
+    },
+    "Read Slack Messages": {
+      "main": [[{ "node": "Merge Messages", "type": "main", "index": 0 }]]
+    },
+    "Merge Messages": {
+      "main": [[{ "node": "Agent 1: Scan Topics", "type": "main", "index": 0 }]]
+    },
+    "Agent 1: Scan Topics": {
+      "main": [[{ "node": "Parse Topics", "type": "main", "index": 0 }]]
+    },
+    "Parse Topics": {
+      "main": [[{ "node": "Topics Found?", "type": "main", "index": 0 }]]
+    },
+    "Topics Found?": {
+      "main": [
+        [{ "node": "Agent 2: Write Posts", "type": "main", "index": 0 }],
+        [{ "node": "Notify: No Topics", "type": "main", "index": 0 }]
+      ]
+    },
+    "Agent 2: Write Posts": {
+      "main": [[{ "node": "Agent 3: Format for Approval", "type": "main", "index": 0 }]]
+    },
+    "Agent 3: Format for Approval": {
+      "main": [[{ "node": "Send to Slack for Approval", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "tags": [{ "name": "social-pipeline" }]
+}
