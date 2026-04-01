@@ -1,0 +1,436 @@
+{
+  "name": "Social Content Pipeline — Slack to LinkedIn/X",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "triggerAtHour": 9 },
+            { "triggerAtHour": 13 },
+            { "triggerAtHour": 17 }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule (3x Daily)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Runs at 9am, 1pm, 5pm ET. Adjust timezone in n8n settings."
+    },
+    {
+      "parameters": {
+        "resource": "channel",
+        "operation": "history",
+        "channelId": "={{ $json.slack_channels }}",
+        "limit": 100,
+        "filters": {
+          "oldest": "={{ $now.minus(8, 'hours').toUnixInteger() }}"
+        }
+      },
+      "id": "slack-read-messages",
+      "name": "Read Slack Messages",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [250, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "SLACK_CREDENTIAL_ID",
+          "name": "Slack API"
+        }
+      },
+      "notes": "Reads messages from the last 8 hours. Configure channel IDs below."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "channels-list",
+              "name": "slack_channels",
+              "value": "={{ ['C_CHANNEL_ID_1', 'C_CHANNEL_ID_2', 'C_CHANNEL_ID_3'] }}",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "id": "set-channels",
+      "name": "Set Slack Channels",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [100, 100],
+      "notes": "Add your Slack channel IDs here. Find them in Slack channel settings."
+    },
+    {
+      "parameters": {
+        "operation": "splitOut",
+        "fieldToSplitOut": "slack_channels"
+      },
+      "id": "split-channels",
+      "name": "Split Channels",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [150, 300]
+    },
+    {
+      "parameters": {
+        "operation": "aggregate",
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "all_messages"
+      },
+      "id": "merge-messages",
+      "name": "Merge All Messages",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [400, 300],
+      "notes": "Combines messages from all channels into a single array for Claude."
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $credentials.anthropicApi.apiKey }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: $('Load Scanner Prompt').item.json.prompt_text, messages: [{ role: 'user', content: 'Here are the Slack messages to scan:\\n\\n' + JSON.stringify($json.all_messages) }] }) }}"
+      },
+      "id": "agent1-claude-scan",
+      "name": "Agent 1: Claude Slack Scanner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API Key"
+        }
+      },
+      "notes": "Sends all Slack messages to Claude with the scanner system prompt. Returns identified topics as JSON."
+    },
+    {
+      "parameters": {
+        "filePath": "/prompts/agent1-slack-scanner.md"
+      },
+      "id": "load-scanner-prompt",
+      "name": "Load Scanner Prompt",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [500, 100],
+      "notes": "Alternative: paste the prompt directly into a Set node instead of reading from file."
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst content = response.content[0].text;\n\ntry {\n  const parsed = JSON.parse(content);\n  \n  if (!parsed.topics_found || parsed.topics_found.length === 0) {\n    return [{ json: { has_topics: false, message: 'No interesting topics found in this scan.' } }];\n  }\n  \n  return parsed.topics_found.map(topic => ({\n    json: {\n      has_topics: true,\n      ...topic\n    }\n  }));\n} catch (e) {\n  return [{ json: { has_topics: false, error: 'Failed to parse Claude response', raw: content } }];\n}"
+      },
+      "id": "parse-topics",
+      "name": "Parse Topics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "notes": "Parses Claude's JSON response into individual topic items. Filters out empty scans."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.has_topics }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "has-topics-check",
+      "name": "Has Topics?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "notes": "Routes to content creation if topics found, otherwise stops."
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $credentials.anthropicApi.apiKey }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4096, system: $('Load Creator Prompt').item.json.prompt_text, messages: [{ role: 'user', content: 'Create social media posts for this topic:\\n\\n' + JSON.stringify({ topic: $json, screenshots: $json.has_screenshots ? 'Screenshots are attached — reference them in posts' : 'No screenshots available' }) }] }) }}"
+      },
+      "id": "agent2-claude-creator",
+      "name": "Agent 2: Claude Content Creator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API Key"
+        }
+      },
+      "notes": "Sends each topic to Claude to generate LinkedIn + X post drafts."
+    },
+    {
+      "parameters": {
+        "filePath": "/prompts/agent2-content-creator.md"
+      },
+      "id": "load-creator-prompt",
+      "name": "Load Creator Prompt",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [1150, 50],
+      "notes": "Alternative: paste the prompt directly into a Set node."
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst content = response.content[0].text;\n\ntry {\n  const parsed = JSON.parse(content);\n  return [{ json: parsed }];\n} catch (e) {\n  // If Claude returns markdown-wrapped JSON, strip it\n  const cleaned = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  try {\n    return [{ json: JSON.parse(cleaned) }];\n  } catch (e2) {\n    return [{ json: { error: 'Failed to parse content creator response', raw: content } }];\n  }\n}"
+      },
+      "id": "parse-posts",
+      "name": "Parse Draft Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 200],
+      "notes": "Parses Claude's content creation response."
+    },
+    {
+      "parameters": {
+        "jsCode": "const post = $input.first().json;\n\nconst linkedinSection = post.linkedin_post ? \n  `*LinkedIn Post:*\\n>${post.linkedin_post.text.split('\\n').join('\\n>')}\\n\\n_Hashtags:_ ${post.linkedin_post.hashtags.join(' ')}\\n_Image:_ ${post.linkedin_post.has_image ? post.linkedin_post.image_instructions : 'None'}` :\n  '*LinkedIn Post:* Not generated';\n\nconst xSection = post.x_post ?\n  `*X Post:*\\n>${post.x_post.text}\\n${post.x_post.thread && post.x_post.thread.length > 0 ? '\\n_Thread:_\\n' + post.x_post.thread.map((t, i) => `>${i+2}. ${t}`).join('\\n') : ''}\\n_Image:_ ${post.x_post.has_image ? post.x_post.image_instructions : 'None'}` :\n  '*X Post:* Not generated';\n\nconst slackMessage = `*Social Post Draft for Approval*\\n━━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n*Topic:* ${post.topic_id}\\n\\n---\\n\\n${linkedinSection}\\n\\n---\\n\\n${xSection}\\n\\n---\\n\\n*Posting Notes:* ${post.posting_notes || 'None'}\\n\\n━━━━━━━━━━━━━━━━━━━━━━━━━\\nReply with:\\n:white_check_mark: — Approve and post as-is\\n:pencil: — Approve with edits (reply with your changes)\\n:x: — Reject this post`;\n\nreturn [{ json: { ...post, slack_approval_message: slackMessage } }];"
+      },
+      "id": "agent3-format-approval",
+      "name": "Agent 3: Format Approval Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 200],
+      "notes": "Formats the draft posts into a clean Slack message for approval."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "APPROVAL_CHANNEL_ID",
+        "text": "={{ $json.slack_approval_message }}",
+        "otherOptions": {}
+      },
+      "id": "slack-send-approval",
+      "name": "Send to Slack for Approval",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1900, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "SLACK_CREDENTIAL_ID",
+          "name": "Slack API"
+        }
+      },
+      "notes": "Posts the draft to your approval channel. Set the channel ID."
+    },
+    {
+      "parameters": {
+        "event": "reaction_added",
+        "channelId": "APPROVAL_CHANNEL_ID"
+      },
+      "id": "slack-reaction-trigger",
+      "name": "Wait for Approval Reaction",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [0, 700],
+      "notes": "SEPARATE WORKFLOW: This triggers when someone reacts to the approval message. Start a new workflow with this trigger."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event.reaction }}",
+              "operation": "equals",
+              "value2": "white_check_mark"
+            }
+          ]
+        }
+      },
+      "id": "is-approved",
+      "name": "Is Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [250, 700],
+      "notes": "Checks if the reaction is a checkmark (approved)."
+    },
+    {
+      "parameters": {
+        "url": "https://api.linkedin.com/v2/ugcPosts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $credentials.linkedinOAuth2.accessToken }}" },
+            { "name": "X-Restli-Protocol-Version", "value": "2.0.0" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ author: 'urn:li:organization:' + $env.LINKEDIN_ORG_ID, lifecycleState: 'PUBLISHED', specificContent: { 'com.linkedin.ugc.ShareContent': { shareCommentary: { text: $json.linkedin_post.text + '\\n\\n' + $json.linkedin_post.hashtags.join(' ') }, shareMediaCategory: 'NONE' } }, visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' } }) }}"
+      },
+      "id": "agent4-post-linkedin",
+      "name": "Agent 4: Post to LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LINKEDIN_CREDENTIAL_ID",
+          "name": "LinkedIn OAuth2"
+        }
+      },
+      "notes": "Posts approved content to LinkedIn via API. Requires LinkedIn OAuth2 credentials."
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.com/2/tweets",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $credentials.twitterOAuth2.accessToken }}" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.x_post.text }) }}"
+      },
+      "id": "agent4-post-x",
+      "name": "Agent 4: Post to X",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 800],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "X_CREDENTIAL_ID",
+          "name": "X OAuth2"
+        }
+      },
+      "notes": "Posts approved content to X. Requires X/Twitter OAuth2 credentials."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "APPROVAL_CHANNEL_ID",
+        "text": "={{ ':white_check_mark: Posted successfully!\\n\\nLinkedIn: ' + ($json.linkedin_response ? 'Posted' : 'Skipped') + '\\nX: ' + ($json.x_response ? 'Posted' : 'Skipped') }}"
+      },
+      "id": "slack-confirm-posted",
+      "name": "Confirm in Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [750, 700],
+      "credentials": {
+        "slackApi": {
+          "id": "SLACK_CREDENTIAL_ID",
+          "name": "Slack API"
+        }
+      },
+      "notes": "Sends a confirmation message after posting."
+    }
+  ],
+  "connections": {
+    "Schedule (3x Daily)": {
+      "main": [
+        [{ "node": "Set Slack Channels", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Slack Channels": {
+      "main": [
+        [{ "node": "Split Channels", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split Channels": {
+      "main": [
+        [{ "node": "Read Slack Messages", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read Slack Messages": {
+      "main": [
+        [{ "node": "Merge All Messages", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge All Messages": {
+      "main": [
+        [{ "node": "Agent 1: Claude Slack Scanner", "type": "main", "index": 0 }]
+      ]
+    },
+    "Agent 1: Claude Slack Scanner": {
+      "main": [
+        [{ "node": "Parse Topics", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Topics": {
+      "main": [
+        [{ "node": "Has Topics?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Has Topics?": {
+      "main": [
+        [{ "node": "Agent 2: Claude Content Creator", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Agent 2: Claude Content Creator": {
+      "main": [
+        [{ "node": "Parse Draft Posts", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Draft Posts": {
+      "main": [
+        [{ "node": "Agent 3: Format Approval Message", "type": "main", "index": 0 }]
+      ]
+    },
+    "Agent 3: Format Approval Message": {
+      "main": [
+        [{ "node": "Send to Slack for Approval", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait for Approval Reaction": {
+      "main": [
+        [{ "node": "Is Approved?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Is Approved?": {
+      "main": [
+        [
+          { "node": "Agent 4: Post to LinkedIn", "type": "main", "index": 0 },
+          { "node": "Agent 4: Post to X", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Agent 4: Post to LinkedIn": {
+      "main": [
+        [{ "node": "Confirm in Slack", "type": "main", "index": 0 }]
+      ]
+    },
+    "Agent 4: Post to X": {
+      "main": [
+        [{ "node": "Confirm in Slack", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "tags": [
+    { "name": "social-media" },
+    { "name": "content-pipeline" },
+    { "name": "claude-api" }
+  ]
+}
